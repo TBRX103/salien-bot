@@ -1,19 +1,17 @@
 // ==UserScript==
 // @name         Saliens bot
 // @namespace    http://tampermonkey.net/
-// @version      15
+// @version      24
 // @description  Beat all the saliens levels
 // @author       https://github.com/meepen/salien-bot
 // @match        https://steamcommunity.com/saliengame
 // @match        https://steamcommunity.com/saliengame/
 // @match        https://steamcommunity.com/saliengame/play
 // @match        https://steamcommunity.com/saliengame/play/
-// @downloadURL  https://github.com/meepen/salien-bot/raw/master/index.user.js
-// @updateURL    https://github.com/meepen/salien-bot/raw/master/index.user.js
 // @grant        none
 // ==/UserScript==
 
-const MAX_LEVEL = 99;
+
 
 if (typeof GM_info !== "undefined" && (GM_info.scriptHandler || "Greasemonkey") == "Greasemonkey") {
     alert("It's not possible to support Greasemonkey, please try Tampermonkey or ViolentMonkey.");
@@ -21,6 +19,13 @@ if (typeof GM_info !== "undefined" && (GM_info.scriptHandler || "Greasemonkey") 
 
 (function(context) {
 "use strict";
+
+const MAX_LEVEL = 13;
+
+// reload automatically instead of clicking ok
+context.error = context.GameLoadError = function() {
+	window.location.reload();
+}
 
 // when the error is fixed we should remove the following
 CSalien.prototype.UpdateCustomizations = function()
@@ -32,6 +37,19 @@ const APP = context.gApp;
 const GAME = context.gGame;
 const SERVER = context.gServer;
 const PIXI = context.PIXI;
+
+SERVER._ReportScore = SERVER._ReportScore || SERVER.ReportScore;
+SERVER.ReportScore = function ReportScore(nScore, callback, error) {
+    return this._ReportScore(nScore, function ReportScore_callback(results) {
+        let response = results.response;
+        console.log(`Server reported level ${response.new_level} (${response.new_score} / ${response.next_level_score})`)
+        return callback(results);
+    }, function ReportScore_error() {
+        console.log(arguments);
+        if (error)
+            error.apply(null, arguments);
+    });
+}
 
 const Option = function Option(name, def) {
     if (window.localStorage[name] === undefined) {
@@ -54,11 +72,19 @@ const AttackManager = function AttackManager() {
 let isJoining = false;
 const TryContinue = function TryContinue() {
     let continued = false;
+    if (isJoining) 
+        return continued;
     if (GAME.m_State.m_VictoryScreen) {
         GAME.m_State.m_VictoryScreen.children.forEach(function(child) {
             if (child.visible && child.x == 155 && child.y == 300) {// TODO: not this
                 continued = true;
-                child.click();
+                isJoining = true;
+                setTimeout(() => {
+                    isJoining = false
+                }, 6000);
+		setTimeout(() => {
+		    child.pointertap();
+                }, 5000);
             }
         })
     }
@@ -67,15 +93,24 @@ const TryContinue = function TryContinue() {
         GAME.m_State.m_LevelUpScreen.children.forEach(function(child) {
             if (child.visible && child.x == 155 && child.y == 300) {// TODO: not this
                 continued = true;
-                child.click();
+                isJoining = true;
+                child.pointertap();
+                setTimeout(() => {
+                    isJoining = false
+                }, 6000);
+		setTimeout(() => {
+		    child.pointertap();
+                }, 5000);
             }
         })
     }
-    if (GAME.m_State instanceof CBootState) { // First screen
-        gGame.m_State.button.click();
+    if (gServer.m_WebAPI && GAME.m_State instanceof CBootState) { // First screen
+        isJoining = true;
+        setTimeout(() => isJoining = false, 1000);
+        GAME.m_State.button.click();
     }
-    if (GAME.m_State instanceof CPlanetSelectionState && !isJoining) { // Planet Selectiong
-        GAME.m_State.m_rgPlanetSprites[0].click();
+    if (GAME.m_State instanceof CPlanetSelectionState && !isJoining) { // Planet Selection
+        GAME.m_State.m_rgPlanetSprites[0].pointertap();
         isJoining = true;
         setTimeout(() => isJoining = false, 1000);
         continued = true;
@@ -83,21 +118,18 @@ const TryContinue = function TryContinue() {
     if (GAME.m_State instanceof CBattleSelectionState && !isJoining) {
         let bestZoneIdx = GetBestZone();
         if(bestZoneIdx) {
-            console.log(GAME.m_State.m_SalienInfoBox.m_LevelText.text, GAME.m_State.m_SalienInfoBox.m_XPValueText.text);
             console.log("join to zone", bestZoneIdx);
             isJoining = true;
-            SERVER.JoinZone(
-                bestZoneIdx,
-                (results) => {
-                    GAME.ChangeState(new CBattleState(GAME.m_State.m_PlanetData, bestZoneIdx));
-                    isJoining = false;
-                    console.log(results);
-                },
-                () => {
-                    console.log("fail");
-                    isJoining = false;
-                }
-            );
+            GAME.m_State.m_Grid.click(bestZoneIdx % k_NumMapTilesW, (bestZoneIdx / k_NumMapTilesW) | 0);
+            setTimeout(() => isJoining = false, 1000);
+        }
+        else {
+            isJoining = true;
+            GAME.m_State.m_LeaveButton.click();
+            console.log("Leaving planet, no zones left");
+            setTimeout(() => {
+                window.location.reload();
+            }, 1000);
         }
         console.log(bestZoneIdx);
         return;
@@ -200,6 +232,16 @@ const EnemyCenter = function EnemyCenter(enemy) {
     ];
 }
 
+const BlackholeOfEnemy = function BlackholeOfEnemy(enemy) {
+    for(var [_, blackhole] of AttackManager().m_mapBlackholes) {
+        // Check if enemy is very close to blackhole
+        if ( EnemyCenter(enemy)[0] < blackhole.x || EnemyCenter(enemy)[0] > blackhole.x ||
+             EnemyCenter(enemy)[1] < blackhole.y || EnemyCenter(enemy)[1] > blackhole.y ) {
+            return blackhole;
+        }
+    }
+    return null;
+}
 
 class Attack {
     constructor() {
@@ -252,12 +294,15 @@ class ClickAttack extends Attack {
             this.attack(target);
     }
     attack(enemy) {
-        enemy.m_Sprite.click();
+        enemy.m_Sprite.pointertap();
         this.nextAttackDelta = 1 / CLICKS_PER_SECOND;
     }
 }
 
 class ProjectileAttack extends Attack {
+    targetPosition(target) {
+        return EnemyCenter(target);
+    }
     shouldAttack(delta) {
         return CanAttack(this.getAttackName());
     }
@@ -278,8 +323,9 @@ class ProjectileAttack extends Attack {
             }
         });
 
-        if (target)
-            this.attack.apply(this, EnemyCenter(target));
+        if (target) {
+            this.attack.apply(this, this.targetPosition(target));
+        }
     }
     attack(x, y) {
         SetMouse(x, y)
@@ -289,6 +335,22 @@ class ProjectileAttack extends Attack {
 
 // the '1' button (SlimeAttack PsychicAttack BeastAttack - depends on body type of your salien)
 class SpecialAttack extends ProjectileAttack {
+
+    targetPosition(target) {
+        var finalTargetPosition = EnemyCenter(target);
+
+        // SpecialAttack's projectile is quite slow, so we need to aim ahead of the target
+        finalTargetPosition[0] += 50*EnemySpeed(target);
+
+        // If target is stuck in blackhole, shoot at black hole instead
+        var blackhole = BlackholeOfEnemy(target);
+        if(blackhole != null) {
+            finalTargetPosition = [blackhole.x, blackhole.y];
+        }
+
+        return finalTargetPosition;
+    }
+
     getAttackName() {
         if (gSalien.m_BodyType == "slime")
             return "slimeattack";
@@ -307,6 +369,11 @@ class BombAttack extends ProjectileAttack {
 class BlackholeAttack extends ProjectileAttack {
     getAttackName() {
         return "blackhole";
+    }
+}
+class MeteorAttack extends ProjectileAttack {
+    getAttackName() {
+        return "boulder";
     }
 }
 
@@ -338,6 +405,7 @@ let attacks = [
     new SpecialAttack(),
     new FreezeAttack(),
     new BombAttack(),
+    new MeteorAttack(),
     new BlackholeAttack()
 ]
 
@@ -367,7 +435,7 @@ context.BOT_FUNCTION = function ticker(delta) {
         return;
     }
 
-    if(GAME.m_IsStateLoading || !context.gPlayerInfo) {
+    if (GAME.m_IsStateLoading) {
         return;
     }
 

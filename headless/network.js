@@ -1,9 +1,12 @@
 // <script>
 "use strict";
 
-const gLanguage = "english";
+let gLanguage = "english";
 const CWebAPI = require("./webapi.js").CWebAPI;
 const $J = module.exports.config = require("./jquery_node.js").jQuery;
+module.exports.ChangeLanguage = function ChangeLanguage(lang) {
+	gLanguage = lang;
+}
 
 let CServerInterface = module.exports.CServerInterface = function( rgResult )
 {
@@ -195,7 +198,7 @@ CServerInterface.prototype.ReportScore = function( nScore, callback, error )
 	}).fail( error );
 };
 
-CServerInterface.prototype.LeaveGameInstance = function( instanceid, callback )
+CServerInterface.prototype.LeaveGameInstance = function( instanceid, callback, error )
 {
 	var instance = this;
 	var rgParams = {
@@ -216,7 +219,5 @@ CServerInterface.prototype.LeaveGameInstance = function( instanceid, callback )
 		{
 			error();
 		}
-	}).fail( function( err ) {
-		console.log(err);
 	});
 };

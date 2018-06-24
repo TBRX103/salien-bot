@@ -1,3 +1,5 @@
+"use strict";
+
 const request = require("request");
 const qs = require("querystring");
 
@@ -19,6 +21,9 @@ $J.ajax({
 */
 
 class AjaxResponse {
+    constructor() {
+        this._fails = 0;
+    }
     success(fn) {
         this.succ = fn;
         return this;
@@ -41,10 +46,7 @@ class AjaxResponseObject {
 const jar = request.jar();
 
 
-j.ajax = function ajax(data) {
-    jar.setCookie(request.cookie(`access_token=${j.token}`), data.url)
-    let ajax_object = new AjaxResponse();
-
+let internal_ajax = function internal_ajax(data, ajax_object) {
     let url = data.url;
     let form;
     if (data.method == "POST")
@@ -52,6 +54,7 @@ j.ajax = function ajax(data) {
     else if (data.method == "GET" && data.data)
         url += "?" + qs.stringify(data.data);
 
+    global.log(`url ${url} requested`);
     request({
         url: url,
         headers: {
@@ -61,11 +64,18 @@ j.ajax = function ajax(data) {
         },
         method: data.method,
         jar: jar,
-        form: form
+        form: form,
+        timeout: 5000
     }, function response(err, resp, body) {
-        if (err) {
-            if (ajax_object.nosucc)
+        if (!ajax_object.nosucc)
+            global.log(new Error("no ajax fail function"));
+
+        if (err || resp.statusCode == 500 || resp.statusCode == 503) {
+            global.log(`failed url ${url}, count ${++ajax_object._fails}`);
+            if (ajax_object._fails > 1)
                 ajax_object.nosucc();
+            else
+                internal_ajax(data, ajax_object);
             return;
         }
         
@@ -76,6 +86,13 @@ j.ajax = function ajax(data) {
         if (ajax_object.succ)
             ajax_object.succ(value, null, new AjaxResponseObject(resp));
     })
+}
+
+j.ajax = function ajax(data) {
+    jar.setCookie(request.cookie(`access_token=${j.token}`), data.url)
+    let ajax_object = new AjaxResponse();
+
+    internal_ajax(data, ajax_object);
 
     return ajax_object;
 }
